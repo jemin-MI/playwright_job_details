@@ -110,7 +110,7 @@ async def main():
         pagewise = []
         for current_page in range(page_count):
 
-            # breakpoint()
+            # #breakpoint
             data_list = []
             main_div = page.locator('.srpResultCard .srpResultCardContainer')
             count = await main_div.count()
@@ -174,7 +174,7 @@ async def main():
                              'skill_list': ', '.join(map(str, skill_list)),
                              'job_id': job_id, 'job_description': description_text}
                 add_data_db(data_dict)
-                breakpoint()
+                #breakpoint
                 data_list.append(data_dict)
 
                 # print("data_dict", data_dict)

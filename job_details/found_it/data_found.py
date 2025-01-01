@@ -1,5 +1,7 @@
 import asyncio
 import json
+import logging
+
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 
@@ -93,35 +95,46 @@ async def navigate_to_search_page(page):
     await submit_button.click()
     await page.wait_for_timeout(5000)
 
-async def scrape_job_data(page):
+async def main_iterator(browser, page, pagewise):
+    current_page = 0
+    data_list = []
+    main_div = page.locator('.srpResultCard .srpResultCardContainer')
+    count = await main_div.count()
+    await page.wait_for_timeout(4000)
+
+    for i in range(count):
+        data_dict = await scrape_job_card(page, main_div.nth(i))
+        data_list.append(data_dict)
+        add_data_db(data_dict)
+        with open(f'data_{Foundit}.json', 'w') as file:
+            file.write(json.dumps(data_list))
+
+    current_page += 1
+    pagewise.append({"page" + str(current_page): data_list})
+
+    # Save page-wise data to JSON
+
+    with open(f'page_wise_{Foundit}.json', 'w') as file:
+        file.write(json.dumps(pagewise))
+
+    # right_arrow = page.locator('.arrow-right')
+    if await page.locator('.arrow-right.disabled').count() > 0:
+        await page.wait_for_timeout(3000)
+        return None
+    else:
+        pagination = page.locator('.pagination .arrow-right')
+        if await pagination.count() > 0:
+            await pagination.click()
+            await page.wait_for_timeout(2000)
+            await main_iterator(browser, page, pagewise)
+
+
+    await page.wait_for_timeout(5000)
+
+async def scrape_job_data(browser,page):
     pagewise = []
-    for current_page in range(page_count):
+    await main_iterator(browser,page, pagewise)
 
-        data_list = []
-        main_div = page.locator('.srpResultCard .srpResultCardContainer')
-        count = await main_div.count()
-        await page.wait_for_timeout(4000)
-
-        for i in range(count):
-            data_dict = await scrape_job_card(page, main_div.nth(i))
-            data_list.append(data_dict)
-            add_data_db(data_dict)
-
-        current_page += 1
-        pagewise.append({"page" + str(current_page): data_list})
-
-        # Save page-wise data to JSON
-        with open(f'page_wise_{Foundit}.json', 'w') as file:
-            file.write(json.dumps(pagewise))
-
-        # Handle pagination
-        if await page.locator('.arrow-right.disabled').count() > 0:
-            break
-        else:
-            pagination = page.locator('.pagination .arrow-right')
-            if await pagination.count() > 0 and page_count > 1:
-                await pagination.click()
-        await page.wait_for_timeout(5000)
 
 async def scrape_job_card(page, card):
     await card.click()
@@ -176,7 +189,7 @@ async def main():
         page = await context.new_page()
 
         await navigate_to_search_page(page)
-        await scrape_job_data(page)
+        await scrape_job_data(browser, page)
 
         await browser.close()
 

@@ -5,8 +5,12 @@ from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 import logging
 
-from contants_dir.constant import Shine_link, Shine, TimesJob_Api_Url, Shine_Job_Search, input_job_location, input_job_role, \
-    shine_job_experiance, page_count
+from sqlalchemy.testing import assert_warns
+from sqlalchemy.util import await_only
+
+from contants_dir.constant import Shine_link, Shine, TimesJob_Api_Url, Shine_Job_Search, input_job_location, \
+    input_job_role, \
+    shine_job_experiance, page_count, Naukari_link
 from models.database import SessionLocal
 from schema.pydentic import JobBase
 from models.model import Job
@@ -106,6 +110,102 @@ def html_to_text(html_content):
         return 'Not Found'
 
 
+async def pagination(data_list, pagewise, page, context):
+    current_page = 1
+    page_dict = {current_page: data_list}
+    pagewise.append(page_dict)
+    # Save page-wise data to JSON
+    with open(f'page_wise{Shine}.json', 'w') as page_file:
+        page_file.write(json.dumps(pagewise))
+
+    # Navigate to next page if available
+    left_panel = page.locator('.jsrp_leftPanel > div')
+    second_div = left_panel.nth(1).locator('a').last
+
+    if await second_div.is_visible():
+        await second_div.click()
+        await main_iterator(page, pagewise, context)
+        logger.info(f"Navigating to page {current_page + 1}")
+    else:
+        logger.warning(f"Next page button not visible, ending loop on page {current_page + 1}")
+        return None
+
+
+async def main_iterator(page, pagewise, context):
+    current_page = 1
+    # Wait and get job results from the page
+    await page.wait_for_timeout(2000)
+    script_tag = page.locator('script#\\__NEXT_DATA__')
+    script_content = await script_tag.text_content()
+
+    data_dict = json.loads(script_content)
+    main_dict = data_dict['props']['pageProps']['initialState']['jsrp']['searchresult']['data']['results']
+
+    data_list = []
+    for i in main_dict:
+        company_name = i['jCName']
+        job_title = i['jJT']
+        job_id = i['id']
+        job_link = f'{Shine_Job_Search}' + i['jSlug']
+        job_location = i['jLoc']
+        posted_on = i['jPDate']
+        required_experiance = i['jExp']
+
+        # Fetch job details from API
+        url = f'{TimesJob_Api_Url}{job_id}/'
+        response = requests.get(url)
+        data = response.json()
+        await page.wait_for_timeout(1500)
+
+        # Extract job description and other details
+        job_description = html_to_text(data['results'][0]['jJD'])
+        required_skills = data['results'][0]['jKwd']
+        job_area = data['results'][0]['jArea']
+        min_salary = data['results'][0]['min_salary']
+        max_salary = data['results'][0]['max_salary']
+
+        # Prepare data dictionary
+        data_dict = {
+            "platform": Shine,
+            "platform_link": Shine_link,
+            "company": company_name,
+            "job_title": job_title,
+            "job_link": job_link,
+            "location": str(job_location),
+            "posted_on": posted_on,
+            "experiance": required_experiance,
+            "skill_list": required_skills,
+            "job_type": ', '.join(map(str, job_area)),
+            "min_salary": min_salary,
+            "max_salary": max_salary,
+            "salary": min_salary + ' ' + max_salary,
+            "job_description": job_description
+        }
+
+        # Add data to the database and save to JSON
+        add_data_db(data_dict)
+        data_list.append(data_dict)
+        with open('shine_data.json', 'w') as file:
+            file.write(json.dumps(data_list))
+
+    # Page-wise data collection
+    await pagination(data_list, pagewise, page, context)
+
+
+async def page_loader(page):
+    await page.goto(f"{Shine_link}", wait_until="domcontentloaded")
+    await page.wait_for_timeout(2000)
+
+    # Fill out search form with job role, location, and experience
+    input_toggle_div = page.locator('#webSearchBar')
+    await input_toggle_div.click()
+    await page.fill('#id_q', input_job_role)
+    await page.fill('#id_loc', input_job_location)
+    job_experince_div = page.locator('#id_exp')
+    await job_experince_div.fill(shine_job_experiance)
+    await job_experince_div.press('Enter')
+
+
 async def main():
     """
     Scrapes job data from the Shine website using Playwright, processes it,
@@ -118,96 +218,10 @@ async def main():
             context = await browser.new_context()
             page = await context.new_page()
 
-            await page.goto(f"{Shine_link}", wait_until="domcontentloaded")
-            await page.wait_for_timeout(2000)
-
-            # Fill out search form with job role, location, and experience
-            input_toggle_div = page.locator('#webSearchBar')
-            await input_toggle_div.click()
-            await page.fill('#id_q', input_job_role)
-            await page.fill('#id_loc', input_job_location)
-            job_experince_div = page.locator('#id_exp')
-            await job_experince_div.fill(shine_job_experiance)
-            await job_experince_div.press('Enter')
+            await page_loader(page)
 
             pagewise = []
-            current_page = 0
-            for k in range(page_count):
-
-                # Wait and get job results from the page
-                await page.wait_for_timeout(2000)
-                script_tag = page.locator('script#\\__NEXT_DATA__')
-                script_content = await script_tag.text_content()
-
-                data_dict = json.loads(script_content)
-                main_dict = data_dict['props']['pageProps']['initialState']['jsrp']['searchresult']['data']['results']
-
-                data_list = []
-                for i in main_dict:
-                    company_name = i['jCName']
-                    job_title = i['jJT']
-                    job_id = i['id']
-                    job_link = f'{Shine_Job_Search}' + i['jSlug']
-                    job_location = i['jLoc']
-                    posted_on = i['jPDate']
-                    required_experiance = i['jExp']
-
-                    # Fetch job details from API
-                    url = f'{TimesJob_Api_Url}{job_id}/'
-                    response = requests.get(url)
-                    data = response.json()
-                    await page.wait_for_timeout(1500)
-
-                    # Extract job description and other details
-                    job_description = html_to_text(data['results'][0]['jJD'])
-                    required_skills = data['results'][0]['jKwd']
-                    job_area = data['results'][0]['jArea']
-                    min_salary = data['results'][0]['min_salary']
-                    max_salary = data['results'][0]['max_salary']
-
-                    # Prepare data dictionary
-                    data_dict = {
-                        "platform": Shine,
-                        "platform_link": Shine_link,
-                        "company": company_name,
-                        "job_title": job_title,
-                        "job_link": job_link,
-                        "location": str(job_location),
-                        "posted_on": posted_on,
-                        "experiance": required_experiance,
-                        "skill_list": required_skills,
-                        "job_type": ', '.join(map(str, job_area)),
-                        "min_salary": min_salary,
-                        "max_salary": max_salary,
-                        "salary": min_salary + ' ' + max_salary,
-                        "job_description": job_description
-                    }
-
-                    # Add data to the database and save to JSON
-                    add_data_db(data_dict)
-                    data_list.append(data_dict)
-                    with open('shine_data.json', 'w') as file:
-                        file.write(json.dumps(data_list))
-
-                # Page-wise data collection
-                current_page += 1
-                page_dict = {current_page: data_list}
-                pagewise.append(page_dict)
-
-                # Save page-wise data to JSON
-                with open(f'page_wise{Shine}.json', 'w') as page_file:
-                    page_file.write(json.dumps(pagewise))
-
-                # Navigate to next page if available
-                left_panel = page.locator('.jsrp_leftPanel > div')
-                second_div = left_panel.nth(1).locator('a').last
-
-                if await second_div.is_visible():
-                    await second_div.click()
-                    logger.info(f"Navigating to page {current_page + 1}")
-                else:
-                    logger.warning(f"Next page button not visible, ending loop on page {current_page + 1}")
-                    break
+            await main_iterator(page, pagewise, context)
 
             await browser.close()
 

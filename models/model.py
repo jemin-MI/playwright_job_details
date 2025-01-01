@@ -1,10 +1,14 @@
 from sqlalchemy import Column, Integer, String, Text
 from datetime import datetime
-from models.database import Base
 
+from sqlalchemy.orm import declarative_base
+
+from sqlalchemy.ext.declarative import declarative_base
+
+Base = declarative_base()
 
 class Job(Base):
-    __tablename__ = 'jobs'
+    __tablename__ = 'jobs_v2'
 
     id = Column(Integer, primary_key=True)
     platform = Column(String(50), nullable=True)  # Job platform (ensure this is unique)
@@ -21,7 +25,7 @@ class Job(Base):
     last_updated = Column(String(255), default=datetime.utcnow, onupdate=datetime.utcnow)  # Timestamp of the last update
     job_description = Column(Text, nullable=True)  # Detailed job description
     experience_level = Column(String(50), nullable=True)  # Required experience level
-    location = Column(String(100), nullable=True)  # Job location
+    location = Column(String(250), nullable=True)  # Job location
     last_date_application = Column(String(250), nullable=True)  # Last date to apply
     opening = Column(String(50), nullable=True)
     industry = Column(String(150), nullable=True)
@@ -32,5 +36,5 @@ class Job(Base):
     job_id = Column(String(50), nullable=True)
     job_role = Column(String(150), nullable=True)
     interview_process = Column(String(100), nullable=True)
-    education = Column(String(250), nullable=True)
+    education = Column(Text, nullable=True)
     specialization = Column(String(200), nullable=True)

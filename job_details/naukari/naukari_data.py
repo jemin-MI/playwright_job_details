@@ -1,6 +1,9 @@
 import asyncio
 import datetime
 import json
+
+from sqlalchemy.util import await_only
+
 from job_details.web_logger import ini_logger
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
@@ -157,7 +160,7 @@ async def extract_job_description(page):
 async def handle_pagination(page, current_page, data_list, pagewise):
     """Handles pagination logic."""
     try:
-        pagewise.append({'page_' + str(current_page + 1): data_list})
+        pagewise.append({'page_' + str(current_page): data_list})
 
         with open(f'page_wise_{Naukari}.json', 'w') as file:
             file.write(json.dumps(pagewise))
@@ -165,15 +168,66 @@ async def handle_pagination(page, current_page, data_list, pagewise):
         icons = page.locator('.ni-icon-arrow-2')
         icon_count = await icons.count()
 
-        if icon_count > 1 and page_count > 1:
+        if icon_count > 1:
             second_icon = icons.nth(1)
-            await second_icon.click()
-            logger.info("Clicked the second icon.")
-        else:
-            logger.info("Second icon not found.")
+            if await second_icon.count():
+                await second_icon.click()
+                await main_iterator(page, pagewise)
+                logger.info("Clicked the second icon.")
+            else:
+                logger.info("Not found second item.")
+
+
     except Exception as e:
         logger.error(f"Error in handle_pagination: {e}")
         raise
+
+
+async def main_iterator(page, pagewise):
+    main_div = page.locator("#listContainer")
+    second_div = main_div.locator("> div").nth(1)
+    inner_div = second_div.locator("> div")
+    sub_divs = inner_div.locator("> div")
+    sub_div_count = await sub_divs.count()
+
+    data_list = []
+    for i in range(sub_div_count):
+        job_title, company, company_url, link = await extract_job_details(page, sub_divs.nth(i))
+
+        if not job_title:
+            continue
+
+        job_type_, duration, salary, location, last_date = await extract_job_type_and_date(page)
+        posted_on, opening, applicants = await extract_applicants_and_openings(page)
+        job_description = await extract_job_description(page)
+
+        data_dict = {
+            "platform": Naukari,
+            "platform_link": Naukari_link,
+            "company": company or None,
+            "company_link": company_url or None,
+            "job_title": job_title or None,
+            "job_link": link,
+            "location": location or None,
+            "job_type": job_type_ or None,
+            "duration": duration or None,
+            "salary": salary or None,
+            "last_date_application": last_date or None,
+            "posted_on": f"{posted_on} as per the {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}" or None,
+            "applicant": applicants or None,
+            "opening": opening or None,
+            "job_description": job_description or None
+        }
+
+        add_data_db(data_dict)
+        data_list.append(data_dict)
+        with open('naukari_data.json', 'w') as file:
+            file.write(json.dumps(data_list))
+
+        await page.go_back()
+        await page.wait_for_timeout(2000)
+
+    await handle_pagination(page, 1, data_list, pagewise)
 
 
 async def main():
@@ -187,51 +241,8 @@ async def main():
             await page.wait_for_timeout(4000)
 
             pagewise = []
-            for k in range(page_count):
-                main_div = page.locator("#listContainer")
-                second_div = main_div.locator("> div").nth(1)
-                inner_div = second_div.locator("> div")
-                sub_divs = inner_div.locator("> div")
-                sub_div_count = await sub_divs.count()
 
-                data_list = []
-                for i in range(sub_div_count):
-                    job_title, company, company_url, link = await extract_job_details(page, sub_divs.nth(i))
-
-                    if not job_title:
-                        continue
-
-                    job_type_, duration, salary, location, last_date = await extract_job_type_and_date(page)
-                    posted_on, opening, applicants = await extract_applicants_and_openings(page)
-                    job_description = await extract_job_description(page)
-
-                    data_dict = {
-                        "platform": Naukari,
-                        "platform_link": Naukari_link,
-                        "company": company or None,
-                        "company_link": company_url or None,
-                        "job_title": job_title or None,
-                        "job_link": link,
-                        "location": location or None,
-                        "job_type": job_type_ or None,
-                        "duration": duration or None,
-                        "salary": salary or None,
-                        "last_date_application": last_date or None,
-                        "posted_on": f"{posted_on} as per the {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}" or None,
-                        "applicant": applicants or None,
-                        "opening": opening or None,
-                        "job_description": job_description or None
-                    }
-
-                    add_data_db(data_dict)
-                    data_list.append(data_dict)
-                    with open('naukari_data.json', 'w') as file:
-                        file.write(json.dumps(data_list))
-
-                    await page.go_back()
-                    await page.wait_for_timeout(3000)
-
-                await handle_pagination(page, k, data_list,pagewise)
+            await main_iterator(page, pagewise)
 
             await browser.close()
     except Exception as e:

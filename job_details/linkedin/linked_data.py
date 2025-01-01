@@ -63,9 +63,9 @@ async def navigate_to_search_page(page, context):
     job_li = page.locator("li.global-nav__primary-item:has(span:has-text('Jobs'))")
     await job_li.click()
 
-    await page.wait_for_timeout(3000)
+    await page.wait_for_timeout(5000)
     await page.fill('.jobs-search-box__keyboard-text-input', input_job_role)
-    await page.wait_for_timeout(1000)
+    await page.wait_for_timeout(2000)
     await page.press('.jobs-search-box__keyboard-text-input', 'Enter')
     await page.wait_for_timeout(2000)
 
@@ -76,20 +76,27 @@ async def navigate_to_search_page(page, context):
 
 
 async def get_company_and_title(page, data_dict):
+    # Initialize defaults
+    data_dict["company"] = "Not Found"
+    data_dict["company_link"] = "Not Found"
+    data_dict["job_title"] = "Not Found"
+    data_dict["job_href"] = "Not Found"
+
+    # Fetch company details
     company_div = page.locator('.job-details-jobs-unified-top-card__company-name')
-    a_tag_company = company_div.locator('a')
-    company_name = await a_tag_company.inner_text()
-    company_link = await a_tag_company.get_attribute('href')
+    if await company_div.count() > 0:
+        a_tag_company = company_div.locator('a')
+        if await a_tag_company.count() > 0:
+            data_dict["company"] = await a_tag_company.inner_text()
+            data_dict["company_link"] = await a_tag_company.get_attribute('href')
 
+    # Fetch job title details
     cm_div = page.locator('.job-details-jobs-unified-top-card__job-title')
-    a_tag = cm_div.locator('a')
-    job_title = await a_tag.inner_text()
-    job_href = await a_tag.get_attribute('href')
-
-    data_dict["company"] = company_name
-    data_dict["company_link"] = company_link
-    data_dict["job_title"] = job_title
-    data_dict["job_href"] = job_href
+    if await cm_div.count() > 0:
+        a_tag = cm_div.locator('a')
+        if await a_tag.count() > 0:
+            data_dict["job_title"] = await a_tag.inner_text()
+            data_dict["job_href"] = await a_tag.get_attribute('href')
 
     return data_dict
 
@@ -183,7 +190,7 @@ async def get_job_desc(page, data_dict):
     return data_dict
 
 
-async def pagination_setup(pagewise, current_page, data_list, page):
+async def pagination_setup(pagewise, current_page, data_list, page, browser,context):
     pagewise.append({'page_' + str(current_page + 1): data_list})
 
     with open(f'pagewise_{Linkedin}.json', 'w') as file:
@@ -192,54 +199,61 @@ async def pagination_setup(pagewise, current_page, data_list, page):
     pagination_div = page.locator('.jobs-search-pagination')
     next_button = pagination_div.locator('.jobs-search-pagination__button--next')
 
-    if await next_button.count() > 0 and page_count > 1:
+    if await next_button.count() > 0:
         await next_button.click()
+        await page.wait_for_timeout(3000)
+        await main_iterator(pagewise, browser, page, context)
     else:
 
         logger.info("Next button not found or not visible.")
+        return None
 
+async def main_iterator(pagewise, browser, page, context):
+    current_page = 0
+    await page.wait_for_selector('.scaffold-layout__list-item')  # Wait for job items to appear
+    job_lists_li = page.locator("li.ember-view.scaffold-layout__list-item")
+    job_count = await job_lists_li.count()
+
+    data_list = []
+    for i in range(job_count):
+        await job_lists_li.nth(i).click()
+        await page.wait_for_timeout(3000)
+        await page.wait_for_selector('div.job-details-jobs-unified-top-card__container--two-pane')
+        parent_div = page.locator("div.job-details-jobs-unified-top-card__container--two-pane")
+        main_div = parent_div.locator("> div")
+        direct_child_divs = main_div.locator("> div")
+
+        data_dict = {}
+        await get_company_and_title(page, data_dict)
+        await get_job_location_time(direct_child_divs, data_dict)
+        await get_job_type(direct_child_divs, data_dict)
+        await get_job_desc(page, data_dict)
+
+        data_dict["platform"] = Linkedin
+        data_dict["platform_link"] = Linkedin_link
+        data_dict["job_link"] = Linkedin_job_link + data_dict["job_href"]
+
+        add_data_db(data_dict)
+        data_list.append(data_dict)
+
+        with open('linked_data.json', 'w') as file:
+            file.write(json.dumps(data_list))
+
+    await pagination_setup(pagewise, current_page, data_list, page, browser,context)
 
 async def main():
     async with async_playwright() as p:
         # Launch the browser
+
         browser = await p.chromium.launch(headless=False)
         context = await browser.new_context()
         page = await context.new_page()
-
         await navigate_to_search_page(page, context)
-
         pagewise = []
-        for current_page in range(page_count):
-            await page.wait_for_selector('.scaffold-layout__list-item')  # Wait for job items to appear
-            job_lists_li = page.locator("li.ember-view.scaffold-layout__list-item")
-            job_count = await job_lists_li.count()
 
-            data_list = []
-            for i in range(job_count):
-                await job_lists_li.nth(i).click()
-                await page.wait_for_timeout(3000)
-                await page.wait_for_selector('div.job-details-jobs-unified-top-card__container--two-pane')
-                parent_div = page.locator("div.job-details-jobs-unified-top-card__container--two-pane")
-                main_div = parent_div.locator("> div")
-                direct_child_divs = main_div.locator("> div")
+        await main_iterator(pagewise,browser, page, context)
 
-                data_dict = {}
-                await get_company_and_title(page, data_dict)
-                await get_job_location_time(direct_child_divs, data_dict)
-                await get_job_type(direct_child_divs, data_dict)
-                await get_job_desc(page, data_dict)
 
-                data_dict["platform"] = Linkedin
-                data_dict["platform_link"] = Linkedin_link
-                data_dict["job_link"] = Linkedin_job_link + data_dict["job_href"]
-
-                add_data_db(data_dict)
-                data_list.append(data_dict)
-
-                with open('linked_data.json', 'w') as file:
-                    file.write(json.dumps(data_list))
-
-            await pagination_setup(pagewise, current_page, data_list, page)
 
         await browser.close()
 

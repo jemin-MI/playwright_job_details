@@ -1,7 +1,11 @@
 import asyncio
 import json
+
+from alembic.command import current
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
+from sqlalchemy.util import await_only
+
 from models.database import SessionLocal
 from schema.pydentic import JobBase
 from models.model import Job
@@ -80,8 +84,7 @@ def html_to_text(html_content):
 
 async def navigate_to_search_page(page):
     await page.goto(Freshers_search, wait_until="domcontentloaded")
-    await page.wait_for_timeout(2000)
-
+    await page.wait_for_timeout(10000)
 
     await page.click("#seach-new-bar")
     await page.wait_for_timeout(1500)
@@ -96,7 +99,7 @@ async def navigate_to_search_page(page):
     await page.wait_for_timeout(7500)
 
 
-async def navigation_change(current_page, data_list, pagewise, page):
+async def navigation_change(current_page, data_list, pagewise, page, context):
     current_page += 1
     pagewise.append({"page" + str(current_page): data_list})
 
@@ -105,8 +108,16 @@ async def navigation_change(current_page, data_list, pagewise, page):
 
     ## checking for the paginations
     next_page_div = page.locator('li.paginate_button.next')
-    if await next_page_div.count() > 0 and page_count > 1:
-        await next_page_div.locator("a").click()
+    if await next_page_div.count() > 0:
+        # Check if the button is disabled
+        if "disabled" in await next_page_div.get_attribute("class"):
+            return None
+        else:
+            await next_page_div.locator("a").click()
+            await page.wait_for_timeout(3000)
+            await main_iterator(pagewise, page, context)
+    else:
+        return None
 
 
 async def job_data_scraper(job_body_div, job_page):
@@ -169,45 +180,51 @@ async def job_data_scraper(job_body_div, job_page):
             'job_type': employment_type, 'job_id': job_id}
 
 
+async def main_iterator(pagewise, page, context):
+    current_page = 0
+    main_div = page.locator('#sort-jobs')
+    sub_divs = main_div.locator('> div.job-container')
+    count = await sub_divs.count()
+
+    data_list = []
+    for i in range(count):
+        job_display_url = await sub_divs.nth(i).get_attribute("job_display_url")
+
+        job_page = await context.new_page()
+        await job_page.goto(job_display_url, wait_until="domcontentloaded")
+        await job_page.wait_for_timeout(4500)
+
+        job_body_div = job_page.locator('div.job-body')
+        if await job_body_div.count() > 0:
+            job_role = await job_body_div.locator('.job-role').text_content()
+            company = await job_body_div.locator('.company-name').inner_text()
+
+            await job_page.wait_for_selector(".experience-and-salary-block")
+            experience_text = 'Not founs'
+            if await job_page.locator(".experience .space").count() > 0:
+                experience_text = await job_page.locator(".experience .space").inner_text()
+
+            salary_text = await job_page.locator(".salary .space").inner_text()
+            data_dict = await job_data_scraper(job_body_div, job_page)
+            data_dict['job_title'] = str(job_role)
+            data_dict['company'] = company
+            data_dict['salary'] = salary_text
+            data_dict['experience_text'] = experience_text
+
+            add_data_db(data_dict)
+            data_list.append(data_dict)
+
+            with open('freshers_data.json', 'w') as file:
+                file.write(json.dumps(data_list))
+
+            await job_page.close()
+
+    await navigation_change(current_page, data_list, pagewise, page, context)
+
+
 async def scrape_job_data(page, context):
     pagewise = []
-    for current_page in range(page_count):
-
-        main_div = page.locator('#sort-jobs')
-        sub_divs = main_div.locator('> div.job-container')
-        count = await sub_divs.count()
-
-        data_list = []
-        for i in range(count):
-            job_display_url = await sub_divs.nth(i).get_attribute("job_display_url")
-
-            job_page = await context.new_page()
-            await job_page.goto(job_display_url, wait_until="domcontentloaded")
-            await job_page.wait_for_timeout(4500)
-
-            job_body_div = job_page.locator('div.job-body')
-            if await job_body_div.count() > 0:
-                job_role = await job_body_div.locator('.job-role').text_content()
-                company = await job_body_div.locator('.company-name').inner_text()
-
-                await job_page.wait_for_selector(".experience-and-salary-block")
-                experience_text = await job_page.locator(".experience .space").inner_text()
-                salary_text = await job_page.locator(".salary .space").inner_text()
-                data_dict = await job_data_scraper(job_body_div, job_page)
-                data_dict['job_title'] = str(job_role)
-                data_dict['company'] = company
-                data_dict['salary'] = salary_text
-                data_dict['experience_text'] = experience_text
-
-                add_data_db(data_dict)
-                data_list.append(data_dict)
-
-                with open('freshers_data.json', 'w') as file:
-                    file.write(json.dumps(data_list))
-
-                await job_page.close()
-
-        await navigation_change(current_page, data_list, pagewise, page)
+    await main_iterator(pagewise, page, context)
 
 
 async def main():

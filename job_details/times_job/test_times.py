@@ -1,12 +1,18 @@
 import asyncio
 import json
 import re
+import logging
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
+
+from contants_dir.constant import TimesJob_link, TimesJob, input_job_role, page_count
 from models.database import SessionLocal
 from schema.pydentic import JobBase
 from models.model import Job
 
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def add_data_db(data_dict):
     session = SessionLocal()
@@ -29,16 +35,16 @@ def add_data_db(data_dict):
         experience_level=data_list_pydantic.experience_level,
         location=data_list_pydantic.location,
         last_date_application=data_list_pydantic.last_date_application,
-        industry= data_list_pydantic.industry,
-        job_type =  data_list_pydantic.job_type,
-        industry_function =  data_list_pydantic,
-        skill_list = data_list_pydantic,
-        early_applicant =  data_list_pydantic.industry_function,
-        job_id =  data_list_pydantic.job_id,
-        job_role =  data_list_pydantic.job_role,
-        interview_process =  data_list_pydantic.interview_process,
-        education =  data_list_pydantic.education,
-        specialization =  data_list_pydantic.specialization,
+        industry=data_list_pydantic.industry,
+        job_type=data_list_pydantic.job_type,
+        industry_function=data_list_pydantic.industry_function,
+        skill_list=data_list_pydantic.skill_list,
+        early_applicant=data_list_pydantic.early_applicant,
+        job_id=data_list_pydantic.job_id,
+        job_role=data_list_pydantic.job_role,
+        interview_process=data_list_pydantic.interview_process,
+        education=data_list_pydantic.education,
+        specialization=data_list_pydantic.specialization,
     )
 
     # Step 3: Add to session and commit
@@ -91,25 +97,18 @@ async def main():
             with open("times_cookie.json", "r") as f:
                 cookies = json.load(f)
                 await context.add_cookies(cookies)  # Add cookies to the context
-                print("Cookies loaded successfully.")
+                logger.info("Cookies loaded successfully.")
         except FileNotFoundError:
-            print("Cookie file not found. Proceeding without cookies.")
+            logger.warning("Cookie file not found. Proceeding without cookies.")
         except json.JSONDecodeError:
-            print("Failed to decode JSON from the cookie file.")
+            logger.error("Failed to decode JSON from the cookie file.")
 
         page = await context.new_page()
 
-        job_title_input = 'Intern'
-        job_location_input = 'Ahmedabad'
-        job_experiance_input = '1 Year'
-        page_count = 2
-
-        await page.goto(f"https://www.timesjobs.com/", wait_until="domcontentloaded")
+        await page.goto(TimesJob_link, wait_until="domcontentloaded")
         await page.wait_for_timeout(4000)
 
-        await page.fill('#txtKeywords', job_title_input)
-        # await page.locator('span._selectedValueExp').fill(job_experiance_input)
-        await page.fill('#txtLocation', job_location_input)
+        await page.fill('#txtKeywords', input_job_role)
 
         await page.locator('#quickSearchBean .common-btn').press('Enter')
         await page.wait_for_timeout(5500)
@@ -117,6 +116,7 @@ async def main():
         page_list = []
 
         for k in range(page_count):
+
             link_list = []
             ul = page.locator("ul.new-joblist")
             # Get all the `li` elements within the `ul`
@@ -173,7 +173,6 @@ async def main():
                 job_basic_info = page.locator('.job-basic-info ul')
                 job_basic = job_basic_info.locator('li.clearfix')
                 li_count = await job_basic.count()
-                # print("count of the ---------", li_count)
 
                 for i in range(li_count):
                     label = await job_basic.nth(i).locator("label").text_content() if await job_basic.nth(i).locator(
@@ -214,8 +213,8 @@ async def main():
                     skills.append(skill_name)
 
                 data_dict = {
-                    'platform': "Times Job",
-                    'platform_link': "https://www.timesjobs.com/",
+                    'platform': TimesJob,
+                    'platform_link': TimesJob_link,
                     'job_title': job_title,
                     'job_link': link,
                     'company': company_name,
@@ -230,13 +229,11 @@ async def main():
                     'specialization': specialization,
                     'education': qualification,
                     'job_type': employment,
-                    'skill_list':', '.join(map(str, skills)),
+                    'skill_list': ', '.join(map(str, skills)),
                 }
                 add_data_db(data_dict)
-                breakpoint()
                 data_list.append(data_dict)
 
-                # print("data_list------------------------", data_list)
                 await page.go_back()
                 with open('data_times.json', 'w') as file:
                     file.write(json.dumps(data_list))  # Writes JSON with indentation for readability
@@ -248,11 +245,11 @@ async def main():
                 await pagination_div.nth(1).click()
                 await page.wait_for_timeout(3000)
 
-                print("New page clicked")
-            with open('pagewise_times.json', 'w') as file:
+                logger.info("New page clicked")
+            with open(f'pagewise_{TimesJob}.json', 'w') as file:
                 file.write(json.dumps(page_list))
 
         await browser.close()
 
-
+# Run the script
 asyncio.run(main())
